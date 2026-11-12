@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>简易搜索引擎</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: #f4f6f3; color: #263c30; font: 15px/1.7 system-ui, "Microsoft YaHei", sans-serif; }
+main { max-width: 1000px; margin: 48px auto; padding: 0 24px; }
+h1 { margin-bottom: 4px; font-size: 30px; }
+h2 { margin: 0 0 8px; font-size: 21px; }
+header p { color: #738174; }
+section { background: white; border: 1px solid #dfe6dc; border-radius: 10px; margin-top: 28px; padding: 26px; }
+section > p { margin-top: 0; font-size: 13px; color: #738174; }
+form { display: flex; gap: 10px; margin: 22px 0; }
+input { flex: 1; min-width: 0; border: 1px solid #bbcdbd; border-radius: 6px; padding: 11px 14px; font: inherit; }
+button { border: 0; border-radius: 6px; background: #236b49; color: white; padding: 11px 22px; font: inherit; cursor: pointer; }
+button:disabled { opacity: .55; cursor: wait; }
+button:hover:not(:disabled) { background: #185737; }
+button:focus-visible, input:focus-visible { outline: 2px solid #759e74; outline-offset: 3px; }
+textarea { width: 100%; min-height: 130px; resize: vertical; border: 1px solid #bbcdbd; border-radius: 6px; padding: 11px 14px; font: inherit; }
+.add-box { border-top: 1px solid #e5ebe2; margin-top: 20px; padding-top: 15px; }
+.article-form { display: grid; }
+.article-form button { justify-self: start; }
+#top-n { flex: none; width: 110px; }
+#names-form { align-items: center; }
+.status { font-size: 13px; color: #617760; overflow-wrap: anywhere; }
+article { border-top: 1px solid #e5ebe2; padding: 18px 0; }
+article h3 { display: inline; font-size: 17px; }
+.score { margin-left: 12px; font-size: 12px; color: #738174; }
+article p { font-size: 14px; color: #62705e; white-space: pre-wrap; }
+summary { cursor: pointer; font-size: 12px; color: #236b49; }
+.table-wrap { max-height: 440px; overflow: auto; margin-top: 18px; }
+table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }
+th, td { padding: 10px 16px; border-bottom: 1px solid #e8ede4; }
+th { background: #f4f7f0; position: sticky; top: 0; font-weight: 500; }
+footer { font-size: 12px; color: #83907e; padding: 22px 0; }
+@media (max-width: 600px) { main { margin: 22px auto; padding: 0 14px; } section { padding: 18px; } h1 { font-size: 25px; } button { padding: 10px 15px; } }
+</style>
+</head>
+<body>
+<main>
+ <header><h1>简易搜索引擎</h1><p>搜索文章、查询重名排名，也可以直接添加姓名和文章。</p></header>
+ <section>
+  <h2>文档搜索</h2>
+  <p>输入关键词查询文章，结果按相关性排序。</p>
+  <form id="search-form"><input id="query" aria-label="关键词" placeholder="试试：Go 并发、数据库索引、HTTP" maxlength="200" required><button>搜索</button></form>
+  <p id="search-status" class="status">输入关键词，开始搜索。</p>
+  <div id="results"></div>
+  <details class="add-box"><summary>＋ 添加文章</summary>
+   <form id="article-add-form" class="article-form"><input id="article-title" aria-label="文章标题" placeholder="文章标题" maxlength="500" required><textarea id="article-content" aria-label="文章正文" placeholder="文章正文" maxlength="100000" required></textarea><button>保存文章</button></form>
+   <p id="article-add-status" class="status" role="status">保存后立即可以搜索，重启后仍然保留。</p>
+  </details>
+ </section>
+ <section>
+  <h2 id="names-heading">姓名排名</h2>
+  <p>预置 10 万条模拟姓名，支持追加。选择前 N 名，查看重名次数最多的姓名。</p>
+  <form id="names-form"><label for="top-n">查询前</label><input id="top-n" type="number" min="1" max="1000" value="100" required><label for="top-n">名</label><button id="names-button">统计</button></form>
+  <p id="names-status" class="status">选择查询数量，点击统计。</p>
+  <div class="table-wrap"><table id="names-table" hidden><thead><tr><th>排名</th><th>姓名</th><th>人数</th></tr></thead><tbody id="names-rows"></tbody></table></div>
+  <details class="add-box"><summary>＋ 添加姓名</summary>
+   <form id="name-add-form"><input id="new-name" aria-label="新增姓名" placeholder="输入姓名，例如：张伟" maxlength="100" required><button>添加</button></form>
+   <p id="name-add-status" class="status" role="status">允许同名，每添加一次就是新增一条记录。</p>
+  </details>
+ </section>
+ <footer>本地 Go 演示项目。姓名和文章分别保存在 data/names.txt 和 data/documents.jsonl。</footer>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+function element(tag, text) {
+  const node = document.createElement(tag);
+  node.textContent = text;
+  return node;
+}
+async function request(url, options) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || '请求失败');
+  return data;
+}
+$('search-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('button');
+  button.disabled = true;
+  $('search-status').textContent = '正在搜索…';
+  try {
+    const data = await request('/api/search?q=' + encodeURIComponent($('query').value));
+    $('search-status').textContent = `找到 ${data.total} 篇文章，展示前 ${data.results.length} 篇。`;
+    $('results').replaceChildren();
+    for (const result of data.results) {
+      const article = document.createElement('article');
+      const score = element('span', 'BM25 ' + result.score.toFixed(3));
+      score.className = 'score';
+      const details = document.createElement('details');
+      details.append(element('summary', '查看全文'), element('p', result.document.content));
+      const summary = Array.from(result.document.content).slice(0, 100).join('');
+      article.append(element('h3', result.document.title), score, element('p', summary), details);
+      $('results').append(article);
+    }
+    if (!data.results.length) $('results').append(element('p', '没有匹配的文档，换个关键词试试。'));
+  } catch (error) {
+    $('search-status').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+$('names-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const n = Number($('top-n').value);
+  $('names-button').disabled = true;
+  $('names-status').textContent = '正在分块和统计，请稍等…';
+  $('names-table').hidden = true;
+  try {
+    const data = await request('/api/names?k=' + n, { method: 'POST' });
+    $('names-heading').textContent = '姓名 Top ' + n;
+    $('names-status').textContent = `有效记录 ${data.total.toLocaleString()} 条，不同姓名 ${data.unique.toLocaleString()} 个，耗时 ${data.elapsed_ms.toFixed(1)} ms。`;
+    $('names-rows').replaceChildren();
+    data.top.forEach((item, index) => {
+      const row = document.createElement('tr');
+      row.append(element('td', index + 1), element('td', item.name), element('td', item.count.toLocaleString()));
+      $('names-rows').append(row);
+    });
+    $('names-table').hidden = false;
+  } catch (error) {
+    $('names-status').textContent = error.message;
+  } finally {
+    $('names-button').disabled = false;
+  }
+});
+async function postJSON(url, data) {
+  return request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+}
+$('name-add-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('button');
+  button.disabled = true;
+  try {
+    const result = await postJSON('/api/names/add', { name: $('new-name').value });
+    $('name-add-status').textContent = `已添加“${result.name}”，重新统计即可计入排名。`;
+    $('new-name').value = '';
+    $('names-table').hidden = true;
+    $('names-status').textContent = '姓名数据已更新，请重新统计。';
+  } catch (error) {
+    $('name-add-status').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+$('article-add-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('button');
+  button.disabled = true;
+  try {
+    const result = await postJSON('/api/documents', { title: $('article-title').value, content: $('article-content').value });
+    $('article-add-status').textContent = `已保存“${result.title}”，现在可以搜索。`;
+    $('article-title').value = '';
+    $('article-content').value = '';
+  } catch (error) {
+    $('article-add-status').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
